@@ -116,7 +116,7 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     except Exception as e:
         return f"Failed to call tool: {str(e)}"
 
-def build_prompt(user_message: str, history: List[Message], tools_available: List[Dict]) -> str:
+def build_prompt(user_id: str, user_message: str, history: List[Message], tools_available: List[Dict]) -> str:
     """Build the prompt for the LLM"""
     
     tools_description = ""
@@ -129,6 +129,12 @@ def build_prompt(user_message: str, history: List[Message], tools_available: Lis
     system_prompt = f"""You are a helpful assistant with access to tools. 
 You can either respond directly to the user or call a tool if needed.
 
+IMPORTANT CONTEXT:
+- The current user's ID is: {user_id}
+- When user refers to "my" or "me" in relation to profiles or transactions, they mean user ID: {user_id}
+- For profile-related queries, use user_id: {user_id}
+- For transaction-related queries about themselves, use user_id: {user_id}
+
 AVAILABLE TOOLS:
 {tools_description}
 
@@ -139,6 +145,11 @@ If you need to call a tool, respond ONLY with this JSON format:
   "name": "tool_name",
   "arguments": {{"param1": "value1", "param2": "value2"}}
 }}
+
+IMPORTANT: When calling tools that require user_id parameter:
+- If user asks about themselves (using words like "my", "me", "I"), use user_id: {user_id}
+- If user specifies another user (e.g., "for user U001"), use that specific user_id
+- If no user is specified, default to {user_id}
 
 Otherwise, respond normally with your answer.
 
@@ -154,7 +165,7 @@ CONVERSATION HISTORY:"""
     
     return system_prompt + history_text + current_message
 
-# Available tools (for now, hardcoded)
+# Available tools (updated with transaction tools)
 AVAILABLE_TOOLS = [
     {
         "name": "get_profile",
@@ -164,10 +175,85 @@ AVAILABLE_TOOLS = [
             "properties": {
                 "user_id": {
                     "type": "string",
-                    "description": "The unique user ID (e.g., 'U001', 'U002')"
+                    "description": "The unique user ID (e.g., 'U001', 'U002', 'U003')"
                 }
             },
             "required": ["user_id"]
+        }
+    },
+    {
+        "name": "get_transactions",
+        "description": "Get all transactions for a specific user. Use when user asks about transaction history, spending, or financial activity.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "The user ID to get transactions for (e.g., 'U001', 'U002', 'U003')"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of transactions to return (default: 10)",
+                    "default": 10
+                }
+            },
+            "required": ["user_id"]
+        }
+    },
+    {
+        "name": "get_transaction_summary",
+        "description": "Get summary statistics of transactions for a user. Use when user asks for financial summary, spending overview, or transaction analytics.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "The user ID to get transaction summary for (e.g., 'U001', 'U002', 'U003')"
+                }
+            },
+            "required": ["user_id"]
+        }
+    },
+    {
+        "name": "search_transactions",
+        "description": "Search transactions with various filters. Use when user asks for specific transactions by category, amount range, date range, or type.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "Filter by user ID (optional). If not specified, search across all users."
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Filter by category (e.g., 'food', 'shopping', 'travel')"
+                },
+                "min_amount": {
+                    "type": "number",
+                    "description": "Minimum transaction amount (e.g., 50)"
+                },
+                "max_amount": {
+                    "type": "number",
+                    "description": "Maximum transaction amount (e.g., 500)"
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "Start date in YYYY-MM-DD format"
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "End date in YYYY-MM-DD format"
+                },
+                "transaction_type": {
+                    "type": "string",
+                    "description": "Transaction type ('credit' or 'debit')"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return (default: 20)",
+                    "default": 20
+                }
+            }
         }
     }
 ]
@@ -183,17 +269,17 @@ async def chat_endpoint(request: ChatRequest):
     history = conversation_history[request.conversation_id]
     
     print(f"\n{'='*60}")
-    print(f"Chat Request: User {request.user_id}")
+    print(f"Chat Request: User ID: {request.user_id}")
     print(f"Message: {request.message}")
     print(f"History length: {len(history)}")
     print(f"{'='*60}")
     
-    # Build the prompt
-    prompt = build_prompt(request.message, history, AVAILABLE_TOOLS)
+    # Build the prompt with user ID
+    prompt = build_prompt(request.user_id, request.message, history, AVAILABLE_TOOLS)
     
     # Call Groq LLM
     try:
-        print("\n🤖 Calling Groq LLM...")
+        print(f"\n🤖 Calling Groq LLM...")
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -205,7 +291,7 @@ async def chat_endpoint(request: ChatRequest):
         )
         
         llm_response = chat_completion.choices[0].message.content
-        print(f"📝 LLM Response: {llm_response[:200]}...")
+        print(f"📝 LLM Response: {llm_response}")
         
         # Check for tool call
         tool_call = detect_tool_call(llm_response)
@@ -213,6 +299,14 @@ async def chat_endpoint(request: ChatRequest):
         if tool_call and tool_call.tool_call:
             print(f"🛠️  Tool call detected: {tool_call.name}")
             print(f"📤 Arguments: {tool_call.arguments}")
+            
+            # Fix user_id if needed
+            if 'user_id' in tool_call.arguments:
+                # Check if user_id needs to be replaced with request.user_id
+                if (tool_call.arguments['user_id'] in ['current user', 'me', 'my', 'myself', ''] or 
+                    tool_call.arguments['user_id'].lower() == 'current user'):
+                    tool_call.arguments['user_id'] = request.user_id
+                    print(f"🔄 Fixed user_id to: {request.user_id}")
             
             # Call the tool
             tool_result = await call_mcp_tool(tool_call.name, tool_call.arguments)
@@ -230,7 +324,7 @@ Original user question: {request.message}
 
 Based on the tool result above, provide a helpful answer to the user:"""
             
-            print("\n🤖 Getting final response from LLM...")
+            print(f"\n🤖 Getting final response from LLM...")
             final_completion = client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant."},
@@ -316,11 +410,33 @@ async def list_tools():
     """List available tools"""
     return AVAILABLE_TOOLS
 
+@app.post("/test_tool")
+async def test_tool(request: dict):
+    """Test tool call directly"""
+    try:
+        tool_name = request.get("tool_name")
+        arguments = request.get("arguments", {})
+        
+        if not tool_name:
+            raise HTTPException(status_code=400, detail="tool_name is required")
+        
+        result = await call_mcp_tool(tool_name, arguments)
+        return {
+            "success": True,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "result": result
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     
     print("🚀 Starting Chatbot Orchestrator on http://localhost:8001")
     print("💬 Chat endpoint: POST http://localhost:8001/chat")
+    print("🧪 Test tool: POST http://localhost:8001/test_tool")
     print("📝 Get conversation: GET http://localhost:8001/conversations/{id}")
     print("🛠️  Available tools: GET http://localhost:8001/tools")
     print("🌐 Health check: GET http://localhost:8001/health")

@@ -252,6 +252,19 @@
                     You can ask me questions, and I can look up user information from the database when needed.
                     <br><br>
                     Try asking: "What are the details for user U001?" or "Tell me about John Doe's profile"
+                    <br><br>
+                        "Hello! I'm your AI assistant with access to user profiles and transaction data.",
+                        <br>
+    "I can help you with:",<br>
+    "• User profile information (name, contact, business details)",<br>
+    "• Transaction history and details",<br>
+    "• Financial summaries and analytics",<br>
+    "• Transaction search with filters",<br>
+    "Try asking:",<br>
+    "• 'What are the details for user U001?'",<br>
+    "• 'Show me transactions for user U002'",<br>
+    "• 'Give me a transaction summary for U003'",<br>
+    "• 'Find food transactions over $50 for U001'"<br>
                 </div>
             </div>
         </div>
@@ -261,8 +274,8 @@
                 type="text" 
                 class="user-id-input" 
                 id="userIdInput" 
-                placeholder="Your User ID (e.g., user123)" 
-                value="user123"
+                placeholder="Your User ID (e.g., U001)" 
+                value="U001"
             >
             
             <div class="chat-input-form">
@@ -279,7 +292,7 @@
             <div style="display: flex; justify-content: space-between; margin-top: 10px;">
                 <button class="clear-button" id="clearButton">Clear Conversation</button>
                 <div style="font-size: 12px; color: #666;">
-                    Using: Llama3-70b-8192
+                    Using: llama-3.3-70b-versatile
                 </div>
             </div>
         </div>
@@ -297,7 +310,21 @@
         // Configuration
         const API_BASE_URL = 'http://localhost:8001';
         let conversationId = 'chat-' + Date.now();
-        
+        // Update welcome messages to include transaction examples
+const WELCOME_MESSAGES = [
+    "Hello! I'm your AI assistant with access to user profiles and transaction data.",
+    "I can help you with:",
+    "• User profile information (name, contact, business details)",
+    "• Transaction history and details",
+    "• Financial summaries and analytics",
+    "• Transaction search with filters",
+    "",
+    "Try asking:",
+    "• 'What are the details for user U001?'",
+    "• 'Show me transactions for user U002'",
+    "• 'Give me a transaction summary for U003'",
+    "• 'Find food transactions over $50 for U001'"
+];
         // DOM Elements
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
@@ -470,7 +497,7 @@
                     const data = JSON.parse(saved);
                     conversationId = data.id;
                     conversationHistory = data.history || [];
-                    userIdInput.value = data.userId || 'user123';
+                    userIdInput.value = data.userId || 'U001';
                     
                     // Replay conversation history
                     data.history.forEach(msg => {
